@@ -1,0 +1,245 @@
+name: Agentic RAG CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  BACKEND_IMAGE: rag-backend
+  FRONTEND_IMAGE: rag-frontend
+
+jobs:
+
+  ######################################
+  # JOB 1: Test backend
+  ######################################
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rag_user
+          POSTGRES_PASSWORD: rag_pass
+          POSTGRES_DB: rag_db_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://rag_user:rag_pass@localhost:5432/rag_db_test
+          OPENAI_API_KEY: sk-test-placeholder
+        run: pytest tests/ -v --tb=short
+
+
+  ######################################
+  # JOB 2: Build & Push both images
+  ######################################
+  build-and-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push backend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$BACKEND_IMAGE:$IMAGE_TAG ./backend
+          docker push    $ECR_REGISTRY/$BACKEND_IMAGE:$IMAGE_TAG
+          docker tag     $ECR_REGISTRY/$BACKEND_IMAGE:$IMAGE_TAG \
+                         $ECR_REGISTRY/$BACKEND_IMAGE:latest
+          docker push    $ECR_REGISTRY/$BACKEND_IMAGE:latest
+
+      - name: Build & push frontend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$FRONTEND_IMAGE:$IMAGE_TAG ./frontend
+          docker push    $ECR_REGISTRY/$FRONTEND_IMAGE:$IMAGE_TAG
+          docker tag     $ECR_REGISTRY/$FRONTEND_IMAGE:$IMAGE_TAG \
+                         $ECR_REGISTRY/$FRONTEND_IMAGE:latest
+          docker push    $ECR_REGISTRY/$FRONTEND_IMAGE:latest
+
+
+  ######################################
+  # JOB 3: Deploy to STAGING
+  ######################################
+  deploy-staging:
+    name: Deploy → Staging
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    environment: staging
+
+    steps:
+      - name: SSH into staging EC2 and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION:            ${{ secrets.AWS_REGION }}
+          OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
+          ECR_REGISTRY:          ${{ secrets.ECR_REGISTRY }}
+          DB_PASSWORD:           ${{ secrets.DB_PASSWORD }}
+        with:
+          host:     ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          envs: AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_REGION,OPENAI_API_KEY,ECR_REGISTRY,DB_PASSWORD
+          script: |
+            export AWS_DEFAULT_REGION=$AWS_REGION
+
+            # Login to ECR
+            aws ecr get-login-password --region $AWS_REGION \
+              | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+            # Pull latest images
+            docker pull $ECR_REGISTRY/rag-backend:latest
+            docker pull $ECR_REGISTRY/rag-frontend:latest
+
+            # Ensure postgres is running (first deploy only)
+            docker network create rag-net 2>/dev/null || true
+            docker run -d --name rag-postgres \
+              --network rag-net \
+              --restart always \
+              -e POSTGRES_USER=rag_user \
+              -e POSTGRES_PASSWORD=$DB_PASSWORD \
+              -e POSTGRES_DB=rag_db \
+              -v rag_pg_data:/var/lib/postgresql/data \
+              pgvector/pgvector:pg16 2>/dev/null || true
+
+            # Deploy backend
+            docker stop rag-backend 2>/dev/null || true
+            docker rm   rag-backend 2>/dev/null || true
+            docker run -d \
+              --name rag-backend \
+              --network rag-net \
+              --restart always \
+              -p 8000:8000 \
+              -e DATABASE_URL=postgresql+asyncpg://rag_user:$DB_PASSWORD@rag-postgres:5432/rag_db \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e ENVIRONMENT=staging \
+              -v rag_uploads:/tmp/uploads \
+              $ECR_REGISTRY/rag-backend:latest
+
+            # Deploy frontend
+            docker stop rag-frontend 2>/dev/null || true
+            docker rm   rag-frontend 2>/dev/null || true
+            docker run -d \
+              --name rag-frontend \
+              --network rag-net \
+              --restart always \
+              -p 3000:3000 \
+              -e VITE_API_URL=http://rag-backend:8000 \
+              $ECR_REGISTRY/rag-frontend:latest
+
+            # Health check
+            sleep 8 && curl -f http://localhost:8000/health
+
+
+  ######################################
+  # JOB 4: Deploy to PRODUCTION
+  ######################################
+  deploy-production:
+    name: Deploy → Production
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    environment: production   # requires manual approval in GitHub
+
+    steps:
+      - name: SSH into production EC2 and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION:            ${{ secrets.AWS_REGION }}
+          OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
+          ECR_REGISTRY:          ${{ secrets.ECR_REGISTRY }}
+          DB_PASSWORD:           ${{ secrets.DB_PASSWORD }}
+        with:
+          host:     ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          envs: AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_REGION,OPENAI_API_KEY,ECR_REGISTRY,DB_PASSWORD
+          script: |
+            export AWS_DEFAULT_REGION=$AWS_REGION
+
+            aws ecr get-login-password --region $AWS_REGION \
+              | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+            docker pull $ECR_REGISTRY/rag-backend:latest
+            docker pull $ECR_REGISTRY/rag-frontend:latest
+
+            docker network create rag-net 2>/dev/null || true
+            docker run -d --name rag-postgres \
+              --network rag-net --restart always \
+              -e POSTGRES_USER=rag_user \
+              -e POSTGRES_PASSWORD=$DB_PASSWORD \
+              -e POSTGRES_DB=rag_db \
+              -v rag_pg_data:/var/lib/postgresql/data \
+              pgvector/pgvector:pg16 2>/dev/null || true
+
+            docker stop rag-backend  2>/dev/null || true
+            docker rm   rag-backend  2>/dev/null || true
+            docker run -d \
+              --name rag-backend \
+              --network rag-net \
+              --restart always \
+              -p 8000:8000 \
+              -e DATABASE_URL=postgresql+asyncpg://rag_user:$DB_PASSWORD@rag-postgres:5432/rag_db \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e ENVIRONMENT=production \
+              -v rag_uploads:/tmp/uploads \
+              $ECR_REGISTRY/rag-backend:latest
+
+            docker stop rag-frontend 2>/dev/null || true
+            docker rm   rag-frontend 2>/dev/null || true
+            docker run -d \
+              --name rag-frontend \
+              --network rag-net \
+              --restart always \
+              -p 3000:3000 \
+              -e VITE_API_URL=http://rag-backend:8000 \
+              $ECR_REGISTRY/rag-frontend:latest
+
+            sleep 8 && curl -f http://localhost:8000/health
