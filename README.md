@@ -24,7 +24,15 @@ Many RAG pipelines run a vector search before every answer. This app works diffe
   </tr>
 </table>
 
-*In the screenshot above, the greeting is answered without a search. The policy question triggers `retrieve_documents`, and the answer cites `product_faq.txt` with expandable source chunks and similarity scores. The model is Gemini's free-tier `gemini-3.6-flash`.*
+*In the screenshot above, the greeting is answered without a search. The vacation and refund questions each trigger `retrieve_documents`, and the answers cite the sample documents with expandable source chunks and similarity scores. The model is Gemini's free-tier `gemini-3.1-flash-lite`.*
+
+### Demo
+
+The full flow: upload two documents, watch them get ingested, then chat with the agent.
+
+[![Demo: uploading documents and chatting with the agent](docs/images/demo.gif)](docs/video/demo.mp4)
+
+*Sped up 1.5×. [Watch the full-speed video (MP4)](docs/video/demo.mp4).*
 
 ---
 
@@ -142,7 +150,7 @@ OPENAI_EMBEDDING_MODEL=gemini-embedding-001
 ```
 
 Embeddings are still requested at 1536 dimensions, so the database schema is the same for both providers. Notes on the free tier:
-- Rate limits are low (around 100 embedded texts per minute). Large documents ingest more slowly because the app waits and retries when it hits the limit.
+- Rate limits are low (around 100 embedded texts per minute, and as few as 20 chat requests per day per model). If you hit the daily limit, switch `OPENAI_CHAT_MODEL` to another Gemini model such as `gemini-3.1-flash-lite`, since each model has its own quota. Large documents ingest more slowly because the app waits and retries when it hits the limit.
 - Google may use free-tier content to improve its products, so use sample documents rather than private ones.
 - Embeddings from different models aren't comparable. If you switch embedding models, re-upload your documents.
 
