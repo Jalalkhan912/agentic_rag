@@ -11,6 +11,21 @@ Many RAG pipelines run a vector search before every answer. This app works diffe
 ![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-412991?logo=openai&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 
+![Chat: the agent answers a greeting directly, then searches the documents for a policy question and cites its sources](docs/images/chat.png)
+
+<table>
+  <tr>
+    <td><img src="docs/images/documents.png" alt="Document library with upload dropzone and ingestion status"></td>
+    <td><img src="docs/images/chat-empty.png" alt="Empty chat with suggested questions"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Document library: upload and track ingestion</em></td>
+    <td align="center"><em>New conversation</em></td>
+  </tr>
+</table>
+
+*In the screenshot above, the greeting is answered without a search. The policy question triggers `retrieve_documents`, and the answer cites `product_faq.txt` with expandable source chunks and similarity scores. The model is Gemini's free-tier `gemini-3.6-flash`.*
+
 ---
 
 ## Features
@@ -110,6 +125,10 @@ docker compose up --build
 | Health check | http://localhost:8000/health |
 
 On startup the backend enables the `vector` extension and creates the tables. To try it out, upload a few documents on the **Documents** page, wait until they show **Ready**, then ask questions on the **Chat** page.
+
+The [`samples/`](samples/) folder has two small fictional documents, an employee handbook and a product FAQ, to get started. Try asking *"How many vacation days do I get?"* or *"What is the refund policy for annual plans?"*
+
+> If port 5432 is already used by a local Postgres, set `POSTGRES_HOST_PORT=5433` (or any free port) in `.env`.
 
 ### Using Gemini's free tier
 
@@ -239,6 +258,8 @@ agentic_rag/
 │   ├── Dockerfile
 │   └── vite.config.js
 ├── .github/workflows/cicd.yml       # Test → build → ECR → staging → production
+├── docs/images/                     # README screenshots
+├── samples/                         # Example documents for a quick demo
 ├── docker-compose.yml
 └── .env.example
 ```

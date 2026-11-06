@@ -122,9 +122,12 @@ export default function DocumentsPage() {
             <tbody>
               {documents.map(doc => (
                 <tr key={doc.id} className={styles.docRow}>
-                  <td className={styles.nameCell}>
-                    <FileText size={13} className={styles.fileIcon} />
-                    <span title={doc.original_name}>{doc.original_name}</span>
+                  <td>
+                    {/* flex lives on an inner div: display:flex on a <td> breaks table layout */}
+                    <div className={styles.nameCell}>
+                      <FileText size={13} className={styles.fileIcon} />
+                      <span title={doc.original_name}>{doc.original_name}</span>
+                    </div>
                   </td>
                   <td><span className={styles.typeBadge}>{doc.file_type.toUpperCase()}</span></td>
                   <td className={styles.mono}>{fmtBytes(doc.file_size_bytes)}</td>

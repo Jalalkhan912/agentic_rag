@@ -1,0 +1,16 @@
+Northwind Cloud Storage — Customer FAQ
+
+Q: What plans are available?
+A: Starter (100 GB, $4/month), Pro (2 TB, $12/month) and Business (10 TB per user, $20/user/month, minimum 3 users).
+
+Q: What is the refund policy?
+A: Monthly plans can be refunded in full within 14 days of the first payment. Annual plans can be refunded pro-rata within 60 days. Refunds are not available for Business plans after the first 30 days.
+
+Q: How is my data protected?
+A: All files are encrypted with AES-256 at rest and TLS 1.3 in transit. Business plans add customer-managed encryption keys and SSO via SAML.
+
+Q: What is the uptime guarantee?
+A: Pro and Business plans include a 99.95% monthly uptime SLA. If uptime falls below the SLA, customers receive a 10% service credit for each 0.1% below target, up to 50% of the monthly fee.
+
+Q: Where is data stored?
+A: Customers choose a region at signup: EU (Frankfurt), US (Virginia) or APAC (Singapore). Data never leaves the chosen region.
