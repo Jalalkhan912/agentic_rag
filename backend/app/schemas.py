@@ -83,3 +83,4 @@ class HealthOut(BaseModel):
     status: str
     version: str
     environment: str
+    chat_model: str

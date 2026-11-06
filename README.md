@@ -20,6 +20,7 @@ Many RAG pipelines run a vector search before every answer. This app works diffe
 - **Document ingestion pipeline.** Extracts text from PDF, DOCX, TXT and MD files, splits it into overlapping token-based chunks (tiktoken), creates embeddings in batches and stores them in **pgvector**.
 - **Background processing.** Uploads return right away while ingestion runs in the background. The UI polls and shows each file's status (pending, processing, ready or failed).
 - **Saved conversations.** Chat history is stored in Postgres, and the most recent messages are sent back to the model as context.
+- **Works with OpenAI or Gemini's free tier.** Any OpenAI-compatible API can be used by setting a base URL. Embedding requests are batched and retried automatically when a free tier's rate limit is hit.
 - **Production-style setup.** Async SQLAlchemy, Docker Compose for local development, and a GitHub Actions pipeline: test → build images → push to AWS ECR → deploy to EC2 staging → production deploy gated on manual approval.
 
 ## Architecture
@@ -74,7 +75,7 @@ upload → validate type/size → save to disk → Document(status=pending)
 
 | Layer | Technology |
 |---|---|
-| LLM & embeddings | OpenAI `gpt-4o`, `text-embedding-3-small` |
+| LLM & embeddings | OpenAI `gpt-4o` + `text-embedding-3-small`, or Gemini `gemini-3.6-flash` + `gemini-embedding-001` |
 | Backend | FastAPI, async SQLAlchemy 2.0, asyncpg, Pydantic v2 |
 | Vector store | PostgreSQL 16 + pgvector |
 | Document parsing | PyPDF2, python-docx, tiktoken |
@@ -87,7 +88,7 @@ upload → validate type/size → save to disk → Document(status=pending)
 ### Prerequisites
 
 - Docker and Docker Compose
-- An OpenAI API key
+- An OpenAI API key, **or** a free Google Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey)
 
 ### Run with Docker Compose
 
@@ -96,7 +97,7 @@ git clone https://github.com/Jalalkhan912/agentic_rag.git
 cd agentic_rag
 
 cp .env.example .env
-# edit .env and set OPENAI_API_KEY
+# edit .env: set OPENAI_API_KEY, or uncomment the Gemini block (Option B)
 
 docker compose up --build
 ```
@@ -109,6 +110,22 @@ docker compose up --build
 | Health check | http://localhost:8000/health |
 
 On startup the backend enables the `vector` extension and creates the tables. To try it out, upload a few documents on the **Documents** page, wait until they show **Ready**, then ask questions on the **Chat** page.
+
+### Using Gemini's free tier
+
+The backend uses the OpenAI SDK, and Gemini provides an [OpenAI-compatible endpoint](https://ai.google.dev/gemini-api/docs/openai), so switching providers only requires settings:
+
+```env
+OPENAI_API_KEY=<your Gemini API key>
+OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+OPENAI_CHAT_MODEL=gemini-3.6-flash
+OPENAI_EMBEDDING_MODEL=gemini-embedding-001
+```
+
+Embeddings are still requested at 1536 dimensions, so the database schema is the same for both providers. Notes on the free tier:
+- Rate limits are low (around 100 embedded texts per minute). Large documents ingest more slowly because the app waits and retries when it hits the limit.
+- Google may use free-tier content to improve its products, so use sample documents rather than private ones.
+- Embeddings from different models aren't comparable. If you switch embedding models, re-upload your documents.
 
 ### Run without Docker (local development)
 
@@ -142,10 +159,13 @@ The backend reads these settings from environment variables or `.env` (see [`bac
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | *(required)* | OpenAI API key |
+| `OPENAI_API_KEY` | *(required)* | OpenAI (or Gemini) API key |
+| `OPENAI_BASE_URL` | *(unset → OpenAI)* | Base URL of any OpenAI-compatible API, such as Gemini |
 | `OPENAI_CHAT_MODEL` | `gpt-4o` | Model used by the agent |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
 | `OPENAI_EMBEDDING_DIMENSIONS` | `1536` | Vector size (must match the pgvector column) |
+| `EMBEDDING_BATCH_SIZE` | `100` | Texts per embedding request (Gemini allows at most 100) |
+| `EMBEDDING_MAX_RETRIES` | `6` | Retries with backoff when the embedding API rate-limits |
 | `DATABASE_URL` | `postgresql+asyncpg://rag_user:rag_pass@localhost:5432/rag_db` | Async Postgres URL |
 | `CHUNK_SIZE` | `512` | Tokens per chunk |
 | `CHUNK_OVERLAP` | `64` | Overlapping tokens between chunks |
@@ -161,7 +181,7 @@ All endpoints except `/health` are prefixed with `/api/v1`. Full schemas are at 
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Service status and version |
+| `GET` | `/health` | Service status, version and configured chat model |
 | `POST` | `/documents/upload` | Upload one or more files (multipart field `files`), returns `202` |
 | `GET` | `/documents?skip=0&limit=50` | List documents with ingestion status |
 | `GET` | `/documents/{id}` | Get one document |
@@ -206,8 +226,8 @@ agentic_rag/
 │   │       ├── agent.py             # Agent loop with OpenAI function calling
 │   │       ├── retriever.py         # pgvector search + tool definition
 │   │       ├── document_processor.py# Extract → chunk → embed → store
-│   │       └── embeddings.py        # Batched OpenAI embeddings
-│   ├── tests/                       # Smoke, agent and chunking tests
+│   │       └── embeddings.py        # Batched embeddings with rate-limit retries
+│   ├── tests/                       # Smoke, agent, chunking and embedding tests
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/
@@ -236,6 +256,7 @@ The suite covers:
 - **Smoke tests:** the app starts, `/health` responds, and unsupported file types are rejected.
 - **Agent loop:** direct answers, every tool call getting a reply, malformed tool arguments, and de-duplication of sources.
 - **Document processing:** chunk size and overlap, empty input, and removal of NUL bytes.
+- **Embeddings:** batching, and retrying when rate-limited.
 
 ## CI/CD
 

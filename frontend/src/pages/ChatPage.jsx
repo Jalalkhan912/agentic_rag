@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Send, BookOpen, User, FileSearch, ChevronDown, ChevronUp, Loader2, Sparkles } from 'lucide-react'
-import { chatApi } from '../api/client'
+import { chatApi, healthApi } from '../api/client'
 import { useConversations } from '../hooks/ConversationsContext'
 import styles from './ChatPage.module.css'
 
@@ -16,6 +16,7 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
   const [currentConvId, setCurrentConvId] = useState(conversationId || null)
+  const [modelName, setModelName] = useState(null)
 
   const { refresh: refreshSidebar } = useConversations()
 
@@ -29,6 +30,13 @@ export default function ChatPage() {
       .then(res => setMessages(res.data.messages))
       .catch(() => setMessages([]))
   }, [conversationId])
+
+  // Show which model the backend is configured to use
+  useEffect(() => {
+    healthApi.check()
+      .then(res => setModelName(res.data.chat_model))
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -87,7 +95,7 @@ export default function ChatPage() {
         </div>
         <div className={styles.topbarRight}>
           <span className={styles.topbarBadge}>
-            <Sparkles size={10} /> GPT-4o · RAG Agent
+            <Sparkles size={10} /> {modelName ? `${modelName} · ` : ''}RAG Agent
           </span>
         </div>
       </div>

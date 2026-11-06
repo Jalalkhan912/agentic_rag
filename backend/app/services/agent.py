@@ -25,10 +25,10 @@ async def run_agent(
     db: AsyncSession,
 ) -> dict:
     """
-    Agentic RAG loop using OpenAI function calling.
+    Agentic RAG loop using OpenAI-style function calling.
 
     Flow:
-      1. Send conversation history + new user message to GPT-4o with the retriever tool
+      1. Send conversation history + new user message to the chat model with the retriever tool
       2. If the model calls retrieve_documents → run the retriever, inject results as a tool result
       3. Send back to the model for final answer
       4. Return the assistant's final message + any retrieved sources

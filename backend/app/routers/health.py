@@ -12,4 +12,5 @@ async def health():
         status="ok",
         version="1.0.0",
         environment=settings.environment,
+        chat_model=settings.openai_chat_model,
     )
