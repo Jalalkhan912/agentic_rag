@@ -33,8 +33,8 @@ async def run_agent(
       3. Send back to the model for final answer
       4. Return the assistant's final message + any retrieved sources
 
-    The agent may call the tool 0 or 1 times per turn.
-    We cap at 3 iterations to prevent infinite loops.
+    The agent may call the tool zero or more times per turn.
+    We cap at 3 model calls to prevent infinite loops.
     """
     client = get_openai_client()
 
@@ -63,54 +63,63 @@ async def run_agent(
         # No tool call → model has its final answer
         if not assistant_message.tool_calls:
             return {
-                "content": assistant_message.content,
+                "content": assistant_message.content or "",
                 "sources": retrieved_sources,
                 "tool_calls": None,
             }
 
         # ── Tool call requested ────────────────────────────────────────────
-        tool_results_for_history = []
-
+        # Every tool_call_id must get a matching "tool" reply, or the next
+        # OpenAI request is rejected — so we answer each call, even bad ones.
+        messages.append(assistant_message)  # type: ignore
         for tool_call in assistant_message.tool_calls:
-            if tool_call.function.name != "retrieve_documents":
-                continue
-
-            args = json.loads(tool_call.function.arguments)
-            query = args.get("query", user_message)
-
-            # Run the actual retriever
-            chunks = await retrieve(query, db)
-            retrieved_sources.extend(chunks)
-
-            # Format retrieved chunks into a readable tool result
-            if chunks:
-                tool_result_text = _format_chunks_for_prompt(chunks)
-            else:
-                tool_result_text = "No relevant documents found for this query."
-
-            tool_results_for_history.append({
+            tool_result_text = await _run_tool_call(tool_call, user_message, db, retrieved_sources)
+            messages.append({
+                "role": "tool",
                 "tool_call_id": tool_call.id,
                 "content": tool_result_text,
             })
 
-        # Append assistant's tool-call message + the tool results to history
-        messages.append(assistant_message)  # type: ignore
-        for tr in tool_results_for_history:
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tr["tool_call_id"],
-                "content": tr["content"],
-            })
-
         # Loop continues → model will now synthesise an answer from the context
 
-    # If we somehow hit MAX_ITERATIONS, return whatever the last message said
+    # Hit MAX_ITERATIONS while the model was still calling tools
     last_content = assistant_message.content or "I wasn't able to generate a response."
     return {
         "content": last_content,
         "sources": retrieved_sources,
         "tool_calls": None,
     }
+
+
+async def _run_tool_call(
+    tool_call,
+    user_message: str,
+    db: AsyncSession,
+    retrieved_sources: list[dict],
+) -> str:
+    """Execute one tool call and return the text to send back to the model.
+
+    New chunks are appended to retrieved_sources (de-duplicated by chunk_id).
+    """
+    if tool_call.function.name != "retrieve_documents":
+        return f"Error: unknown tool '{tool_call.function.name}'."
+
+    try:
+        args = json.loads(tool_call.function.arguments or "{}")
+    except json.JSONDecodeError:
+        args = {}
+    if not isinstance(args, dict):
+        args = {}
+    query = args.get("query") or user_message
+
+    chunks = await retrieve(query, db)
+
+    seen = {s["chunk_id"] for s in retrieved_sources}
+    retrieved_sources.extend(c for c in chunks if c["chunk_id"] not in seen)
+
+    if not chunks:
+        return "No relevant documents found for this query."
+    return _format_chunks_for_prompt(chunks)
 
 
 def _format_chunks_for_prompt(chunks: list[dict]) -> str:

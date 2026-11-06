@@ -41,7 +41,8 @@ class Document(Base):
     )
 
     chunks: Mapped[list["DocumentChunk"]] = relationship(
-        "DocumentChunk", back_populates="document", cascade="all, delete-orphan"
+        "DocumentChunk", back_populates="document",
+        cascade="all, delete-orphan", passive_deletes=True,  # let Postgres cascade
     )
 
 
@@ -88,7 +89,8 @@ class Conversation(Base):
 
     messages: Mapped[list["Message"]] = relationship(
         "Message", back_populates="conversation",
-        cascade="all, delete-orphan", order_by="Message.created_at"
+        cascade="all, delete-orphan", order_by="Message.created_at",
+        passive_deletes=True,
     )
 
 

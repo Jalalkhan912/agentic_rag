@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { MessageSquare, Files, Plus, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { chatApi } from '../../api/client'
 import { useConversations } from '../../hooks/ConversationsContext'
@@ -9,6 +9,7 @@ import styles from './Layout.module.css'
 export default function Layout() {
   const [collapsed, setCollapsed] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
   const { conversations, refresh } = useConversations()
 
   async function handleNewChat() { navigate('/chat') }
@@ -18,7 +19,8 @@ export default function Layout() {
     e.stopPropagation()
     await chatApi.deleteConversation(id)
     refresh()
-    navigate('/chat')
+    // Only leave the page if the open conversation was the one deleted
+    if (location.pathname === `/chat/${id}`) navigate('/chat')
   }
 
   return (

@@ -1,18 +1,19 @@
+import logging
 import uuid
-import asyncio
 import aiofiles
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func
 
 from app.database import get_db
-from app.models import Document, DocumentChunk
+from app.models import Document
 from app.schemas import DocumentOut, DocumentListOut
 from app.services.document_processor import process_document
 from app.config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -34,25 +35,27 @@ async def upload_documents(
     created with status=pending, and processing is queued as a background task.
     Returns immediately — poll /documents/{id} for status updates.
     """
-    created_docs = []
-
+    # Validate every file first so a bad file doesn't leave the others half-uploaded
+    validated: list[tuple[UploadFile, str, bytes]] = []
     for file in files:
-        # Validate extension
-        suffix = Path(file.filename).suffix.lstrip(".").lower()
+        name = file.filename or "unnamed"
+        suffix = Path(name).suffix.lstrip(".").lower()
         if suffix not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=415,
-                detail=f"'{file.filename}': unsupported type '{suffix}'. Allowed: {ALLOWED_EXTENSIONS}",
+                detail=f"'{name}': unsupported type '{suffix}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
             )
 
-        # Read and validate size
         content = await file.read()
         if len(content) > MAX_BYTES:
             raise HTTPException(
                 status_code=413,
-                detail=f"'{file.filename}' exceeds {settings.max_file_size_mb} MB limit.",
+                detail=f"'{name}' exceeds {settings.max_file_size_mb} MB limit.",
             )
+        validated.append((file, suffix, content))
 
+    created_docs = []
+    for file, suffix, content in validated:
         # Save to disk with a UUID-based name to avoid collisions
         file_id = uuid.uuid4()
         stored_name = f"{file_id}.{suffix}"
@@ -61,22 +64,24 @@ async def upload_documents(
         async with aiofiles.open(file_path, "wb") as out:
             await out.write(content)
 
-        # Create DB record
         document = Document(
             id=file_id,
             filename=stored_name,
-            original_name=file.filename,
+            original_name=(file.filename or stored_name)[:255],
             file_type=suffix,
             file_size_bytes=len(content),
         )
         db.add(document)
-        await db.commit()
-        await db.refresh(document)
         created_docs.append(document)
 
+    await db.commit()
+    for document in created_docs:
+        await db.refresh(document)
         # Queue background ingestion
         background_tasks.add_task(
-            _run_processing, document_id=file_id, file_path=file_path
+            _run_processing,
+            document_id=document.id,
+            file_path=UPLOAD_DIR / document.filename,
         )
 
     return created_docs
@@ -130,4 +135,8 @@ async def _run_processing(document_id: uuid.UUID, file_path: Path):
     """Runs in background. Creates its own DB session."""
     from app.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        await process_document(document_id, file_path, db)
+        try:
+            await process_document(document_id, file_path, db)
+        except Exception:
+            # Failure is already recorded on the document row (status=failed)
+            logger.exception("Ingestion failed for document %s", document_id)

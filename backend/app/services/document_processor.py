@@ -26,7 +26,7 @@ def extract_text_from_pdf(file_path: Path) -> list[tuple[str, int]]:
         reader = PyPDF2.PdfReader(f)
         for i, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
-            if text.strip():
+            if text.replace("\x00", "").strip():
                 pages.append((text, i))
     return pages
 
@@ -54,7 +54,8 @@ def extract_text(file_path: Path, file_type: str) -> list[tuple[str, int]]:
     extractor = extractors.get(file_type.lower())
     if not extractor:
         raise ValueError(f"Unsupported file type: {file_type}")
-    return extractor(file_path)
+    # Postgres TEXT columns reject NUL bytes, which some PDFs contain
+    return [(text.replace("\x00", ""), page) for text, page in extractor(file_path)]
 
 
 # ── Chunking ───────────────────────────────────────────────────────────────
@@ -109,7 +110,8 @@ async def process_document(document_id: uuid.UUID, file_path: Path, db: AsyncSes
         document = result.scalar_one()
 
         # 1. Extract text (list of (text, page_number))
-        pages = extract_text(file_path, document.file_type)
+        # Parsing is CPU-bound, so keep it off the event loop
+        pages = await asyncio.to_thread(extract_text, file_path, document.file_type)
         if not pages:
             raise ValueError("No extractable text found in document.")
 

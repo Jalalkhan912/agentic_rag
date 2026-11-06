@@ -1,4 +1,7 @@
 import uuid
+from datetime import datetime
+
+import openai
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -106,11 +109,14 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     ]
 
     # 3. Run the agent
-    agent_result = await run_agent(
-        user_message=payload.message,
-        conversation_history=history_for_agent,
-        db=db,
-    )
+    try:
+        agent_result = await run_agent(
+            user_message=payload.message,
+            conversation_history=history_for_agent,
+            db=db,
+        )
+    except openai.OpenAIError as exc:
+        raise HTTPException(status_code=502, detail=f"Language model request failed: {exc}")
 
     # 4. Persist messages
     user_msg = Message(
@@ -126,6 +132,8 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     )
     db.add(user_msg)
     db.add(assistant_msg)
+    # Bump the conversation so it sorts to the top of the sidebar
+    conversation.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(assistant_msg)
 

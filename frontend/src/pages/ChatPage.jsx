@@ -58,8 +58,8 @@ export default function ChatPage() {
       if (!currentConvId) {
         setCurrentConvId(conversation_id)
         navigate(`/chat/${conversation_id}`, { replace: true })
-        refreshSidebar()   // ← new conversation → update the sidebar immediately
       }
+      refreshSidebar()   // new or updated conversation → re-sort the sidebar
       setMessages(prev => [...prev, { ...message, sources }])
     } catch (err) {
       setError(err.message)
@@ -68,7 +68,7 @@ export default function ChatPage() {
       setSending(false)
       textareaRef.current?.focus()
     }
-  }, [input, sending, currentConvId, navigate])
+  }, [input, sending, currentConvId, navigate, refreshSidebar])
 
   function handleKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
@@ -82,7 +82,7 @@ export default function ChatPage() {
       <div className={styles.topbar}>
         <div className={styles.topbarLeft}>
           <span className={styles.topbarTitle}>
-            {isEmpty ? 'New conversation' : messages[0]?.content?.slice(0, 48) + '…'}
+            {isEmpty ? 'New conversation' : truncate(messages[0]?.content || '', 48)}
           </span>
         </div>
         <div className={styles.topbarRight}>
@@ -142,6 +142,10 @@ export default function ChatPage() {
       </div>
     </div>
   )
+}
+
+function truncate(text, max) {
+  return text.length > max ? text.slice(0, max) + '…' : text
 }
 
 /* ── Empty state ── */
