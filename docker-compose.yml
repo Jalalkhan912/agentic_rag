@@ -9,7 +9,8 @@ services:
       POSTGRES_PASSWORD: rag_pass
       POSTGRES_DB: rag_db
     ports:
-      - "5432:5432"
+      # Host port is configurable in case a local Postgres already uses 5432
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
